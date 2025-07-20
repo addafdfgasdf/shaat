@@ -3,34 +3,93 @@ local player = Players.LocalPlayer
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
--- Настройки
+-- === Настройки ===
 local isSearching = false
+local autoAttackEnabled = true
 local HEIGHT_OFFSET = 3
-local EGG_SPEED = 60 -- Скорость полёта к яйцам (можно изменять)
-local NPC_TELEPORT_DELAY = 0.3 -- Задержка между телепортами к NPC
-local BLACKLIST = {"WhiteBas", "CrackedBas", "Flying Noob", "Dead Noob"}
-local AUTO_ATTACK = false -- Включить автоатаку NPC
-local MAX_WAIT_TIME = 15 -- Максимальное время ожидания объектов (секунд)
-
--- NoClip переменные
+local EGG_SPEED = 50
+local NPC_TELEPORT_DELAY = 0.3
+local BLACKLIST = {"WhiteBas", "CrackedBas", "Flying", "Dead"}
+local MAX_WAIT_TIME = 25
 local NOCLIP_ENABLED = true
 local noclipConnection = nil
 
--- Пути поиска
-local NPCFolder = workspace:FindFirstChild("#GAME") and workspace["#GAME"]:FindFirstChild("Folders") and 
-                 workspace["#GAME"].Folders:FindFirstChild("HumanoidFolder") and 
+-- === Пути ===
+local NPCFolder = workspace:FindFirstChild("#GAME") and workspace["#GAME"].Folders and 
+                 workspace["#GAME"].Folders.HumanoidFolder and 
                  workspace["#GAME"].Folders.HumanoidFolder:FindFirstChild("NPCFolder")
-
-local targetFolder = workspace:FindFirstChild("#GAME") and workspace["#GAME"]:FindFirstChild("Folders") and 
+local targetFolder = workspace:FindFirstChild("#GAME") and workspace["#GAME"].Folders and 
                     workspace["#GAME"].Folders:FindFirstChild("DumpFolder") or workspace
 
--- Список всех возможных яиц
-local eggNames = {
-    "gandon Egg"
+-- === Приоритеты яиц ===
+local EGG_PRIORITY_GROUPS = {
+    -- Группа 1 (высший приоритет)
+    {
+        "dolbaeb egg",
+        "eblan egg",
+        "gandon egg"
+    },
+    -- Группа 2 (средний приоритет)
+    {
+        "xuisos Egg"
+    },
+    -- Группа 3 (низкий приоритет, по желанию)
+    {
+        -- "Small Egg",
+        -- "Basic Egg"
+    }
 }
 
--- Функция для проверки, содержит ли имя NPC запрещенную подстроку
+-- === Скорость ===
+local speedCheckCount = 0
+local MAX_SPEED_CHECKS = 10
+local speedHistory = {} -- Хранение всех собранных значений скорости
+
+-- === Функция определения скорости (обновлённая) ===
+local function updateEggSpeed()
+    if speedCheckCount >= MAX_SPEED_CHECKS then return end
+    local playerHumanoidFolder = workspace["#GAME"] and workspace["#GAME"].Folders and 
+                                 workspace["#GAME"].Folders.HumanoidFolder and 
+                                 workspace["#GAME"].Folders.HumanoidFolder:FindFirstChild("PlayerFolder") and 
+                                 workspace["#GAME"].Folders.HumanoidFolder.PlayerFolder:FindFirstChild(player.Name)
+    if playerHumanoidFolder and playerHumanoidFolder:FindFirstChild("Humanoid") then
+        local baseSpeed = playerHumanoidFolder.Humanoid.WalkSpeed
+        table.insert(speedHistory, baseSpeed)
+        speedCheckCount += 1
+        print("[" .. speedCheckCount .. "/" .. MAX_SPEED_CHECKS .. "] Записана скорость: " .. baseSpeed)
+        if speedCheckCount == MAX_SPEED_CHECKS then
+            -- Подсчет частоты встречаемости скоростей
+            local frequency = {}
+            for _, speed in ipairs(speedHistory) do
+                if frequency[speed] then
+                    frequency[speed] = frequency[speed] + 1
+                else
+                    frequency[speed] = 1
+                end
+            end
+            -- Найти наиболее частую скорость
+            local mostFrequentSpeed = nil
+            local maxCount = 0
+            for speed, count in pairs(frequency) do
+                if count > maxCount or (count == maxCount and speed > mostFrequentSpeed) then
+                    mostFrequentSpeed = speed
+                    maxCount = count
+                end
+            end
+            -- Установить итоговую скорость
+            EGG_SPEED = math.max(1, mostFrequentSpeed)
+            print("Установлена итоговая скорость полёта к яйцам: " .. EGG_SPEED)
+        end
+    else
+        warn("Не удалось найти персонажа игрока для определения скорости")
+        EGG_SPEED = 50 -- Резервная скорость
+    end
+end
+
+-- === Проверка черного списка ===
 local function isNPCBlacklisted(npcName)
     for _, blacklistedName in ipairs(BLACKLIST) do
         if string.find(npcName, blacklistedName) then
@@ -40,10 +99,9 @@ local function isNPCBlacklisted(npcName)
     return false
 end
 
--- Функция NoClip
+-- === NoClip ===
 local function enableNoclip()
     if noclipConnection then noclipConnection:Disconnect() end
-    
     noclipConnection = RunService.Stepped:Connect(function()
         if player.Character then
             for _, part in pairs(player.Character:GetDescendants()) do
@@ -55,13 +113,11 @@ local function enableNoclip()
     end)
 end
 
--- Отключение NoClip
 local function disableNoclip()
     if noclipConnection then
         noclipConnection:Disconnect()
         noclipConnection = nil
     end
-    
     if player.Character then
         for _, part in pairs(player.Character:GetDescendants()) do
             if part:IsA("BasePart") then
@@ -71,25 +127,24 @@ local function disableNoclip()
     end
 end
 
--- Функция для проверки наличия яиц с защитой от ошибок
+-- === Поиск яйца ===
 local function findEgg(eggName)
     if not targetFolder then return nil end
-    
     local success, egg = pcall(function()
         return targetFolder:FindFirstChild(eggName, false) or
                targetFolder:FindFirstChild(eggName.." Egg", false) or
                targetFolder:FindFirstChild("Egg of "..eggName, false)
     end)
-    
     if success and egg and (egg:IsA("Model") or egg:IsA("BasePart")) then
         return egg
     end
     return nil
 end
 
--- Улучшенная функция для получения HumanoidRootPart с таймаутом
+-- === Получение HRP ===
 local function getHRP()
     if not player or not player.Character then
+        warn("Персонаж ещё не загружен. Жду...")
         local startTime = os.clock()
         while os.clock() - startTime < MAX_WAIT_TIME do
             if player and player.Character then
@@ -97,11 +152,14 @@ local function getHRP()
             end
             task.wait(0.1)
         end
-        if not player or not player.Character then return nil end
+        if not player or not player.Character then
+            warn("Персонаж так и не загрузился")
+            return nil
+        end
     end
-
     local hrp = player.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then
+        warn("HumanoidRootPart не найден. Жду...")
         local startTime = os.clock()
         while os.clock() - startTime < MAX_WAIT_TIME do
             hrp = player.Character:FindFirstChild("HumanoidRootPart")
@@ -109,80 +167,60 @@ local function getHRP()
             task.wait(0.1)
         end
     end
-    
+    if not hrp then
+        warn("HumanoidRootPart не найден после ожидания")
+        return nil
+    end
     return hrp
 end
 
--- Движение к яйцу через TweenService
+-- === Перемещение к яйцу ===
 local function moveToEggWithTween(targetPosition)
     local hrp = getHRP()
     if not hrp then return nil end
-    
-    -- Вычисляем расстояние и время для Tween
+    updateEggSpeed()
     local distance = (targetPosition - hrp.Position).Magnitude
     local duration = distance / EGG_SPEED
-    
-    -- Создаем Tween
     local tween = TweenService:Create(
         hrp,
         TweenInfo.new(duration, Enum.EasingStyle.Linear),
         {CFrame = CFrame.new(targetPosition, targetPosition + Vector3.new(0, 0, -1))}
     )
-    
-    -- Запускаем Tween
     tween:Play()
-    
     return tween
 end
 
--- Телепортация к NPC с проверками
-local function teleportToNPC(npc)
-    if not npc then return end
-    
-    local hrp = getHRP()
-    if not hrp then return end
-    
-    local rootPart = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("UpperTorso")
-    if not rootPart then return end
-    
-    hrp.CFrame = CFrame.new(rootPart.Position + Vector3.new(0, HEIGHT_OFFSET, 0))
-end
-
--- Автоподбор яйца с TweenService
+-- === Сбор яйца ===
 local function autoCollectEgg(egg)
     if not egg or not isSearching then return false end
-    
     local hrp = getHRP()
     if not hrp then return false end
-
     local prompt
     local success, err = pcall(function()
         prompt = egg:FindFirstChildOfClass("ProximityPrompt") or
                 (egg:IsA("Model") and egg.PrimaryPart and egg.PrimaryPart:FindFirstChildOfClass("ProximityPrompt"))
     end)
-    
-    if not success or not prompt then return false end
-    
+    if not success or not prompt then
+        warn("Не найден ProximityPrompt у яйца")
+        return false
+    end
     local targetPos
     if egg:IsA("BasePart") then
         targetPos = egg.Position + Vector3.new(0, HEIGHT_OFFSET, 0)
     elseif egg:IsA("Model") and egg.PrimaryPart then
         targetPos = egg.PrimaryPart.Position + Vector3.new(0, HEIGHT_OFFSET, 0)
+    else
+        warn("Неверный тип объекта яйца")
+        return false
     end
-    
-    if not targetPos then return false end
-    
     local tween = moveToEggWithTween(targetPos)
     local startTime = os.clock()
     local maxTime = 8
-    
     while os.clock() - startTime < maxTime and isSearching do
         if not egg or not egg:IsDescendantOf(workspace) then
             tween:Cancel()
             return true
         end
-        
-        -- Проверяем расстояние и активируем промпт
         if (hrp.Position - targetPos).Magnitude < 10 then
             pcall(function()
                 fireproximityprompt(prompt, 3)
@@ -190,29 +228,30 @@ local function autoCollectEgg(egg)
             tween:Cancel()
             return true
         end
-        
         task.wait()
     end
-    
     tween:Cancel()
     return false
 end
 
--- Атака NPC с проверками
-local function attackNPC(npc)
-    if not npc or not isSearching then return end
-    
-    -- Проверяем, не входит ли NPC в черный список
-    if isNPCBlacklisted(npc.Name) then return end
-    
-    local humanoid = npc:FindFirstChild("Humanoid")
-    if not humanoid or humanoid.Health <= 0 then return end
-    
+-- === Атака NPC ===
+local function teleportToNPC(npc)
+    if not npc then return end
     local hrp = getHRP()
     if not hrp then return end
-    
+    local rootPart = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("UpperTorso")
+    if not rootPart then return end
+    hrp.CFrame = CFrame.new(rootPart.Position + Vector3.new(0, HEIGHT_OFFSET, 0))
+end
+
+local function attackNPC(npc)
+    if not npc or not isSearching then return end
+    if isNPCBlacklisted(npc.Name) then return end
+    local humanoid = npc:FindFirstChild("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return end
+    local hrp = getHRP()
+    if not hrp then return end
     teleportToNPC(npc)
-    
     local npcRoot = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("UpperTorso")
     if npcRoot and (hrp.Position - npcRoot.Position).Magnitude < 10 then
         pcall(function()
@@ -221,37 +260,11 @@ local function attackNPC(npc)
     end
 end
 
--- Поиск и сбор яиц с защитой от ошибок
-local function collectEggs()
-    if not isSearching then return false end
-    
-    local hrp = getHRP()
-    if not hrp then return false end
-
-    for _, eggName in ipairs(eggNames) do
-        if not isSearching then break end
-        
-        local egg = findEgg(eggName)
-        if egg then
-            if autoCollectEgg(egg) then
-                task.wait(0.5)
-                return true
-            end
-        end
-    end
-    return false
-end
-
--- Телепортация и атака NPC с проверками
 local function attackNPCs()
-    if not AUTO_ATTACK or not isSearching or not NPCFolder then return end
-    
+    if not isSearching or not NPCFolder then return end
     for _, npc in ipairs(NPCFolder:GetChildren()) do
         if not isSearching then break end
-        
-        -- Пропускаем NPC из черного списка
         if isNPCBlacklisted(npc.Name) then continue end
-        
         if npc:FindFirstChild("Humanoid") and npc.Humanoid.Health > 0 then
             attackNPC(npc)
             task.wait(NPC_TELEPORT_DELAY)
@@ -259,30 +272,48 @@ local function attackNPCs()
     end
 end
 
--- Главный цикл с обработкой ошибок
+-- === Сбор яиц с приоритетами ===
+local function collectEggs()
+    if not isSearching then return false end
+    -- Перебор по уровням приоритета
+    for _, priorityGroup in ipairs(EGG_PRIORITY_GROUPS) do
+        for _, eggName in ipairs(priorityGroup) do
+            if not isSearching then return false end
+            local egg = findEgg(eggName)
+            if egg then
+                print("🎯 Найдено яйцо с приоритетом: " .. eggName)
+                if autoCollectEgg(egg) then
+                    task.wait(0.5)
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+-- === Главный цикл ===
 local function mainLoop()
     while isSearching do
         local success, err = pcall(function()
             if not collectEggs() then
-                attackNPCs()
+                if autoAttackEnabled then
+                    attackNPCs()
+                end
             end
         end)
-        
         if not success then
             warn("Ошибка в главном цикле: " .. tostring(err))
         end
-        
         task.wait(0.1)
     end
 end
 
--- Управление (P для вкл/выкл поиска, N для вкл/выкл NoClip)
+-- === Управление ===
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
-    
     if input.KeyCode == Enum.KeyCode.P then
         isSearching = not isSearching
-        
         if isSearching then
             print("Автопоиск и атака активированы. Нажмите P для остановки")
             task.spawn(mainLoop)
@@ -300,23 +331,18 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
             disableNoclip()
             print("NoClip выключен")
         end
+    elseif input.KeyCode == Enum.KeyCode.O then
+        autoAttackEnabled = not autoAttackEnabled
+        print(autoAttackEnabled and "Автоатака включена" or "Автоатака выключена")
     end
 end)
 
--- Включение NoClip при запуске
-enableNoclip()
-print("Постоянный NoClip активирован (включен по умолчанию)")
-print("Нажмите N для отключения NoClip")
-print("Скорость полёта к яйцам: " .. EGG_SPEED)
-print("Автопоиск и атака: Нажмите P для старта/остановки")
-
--- Функция для безопасного удаления объектов
+-- === Удаление объектов ===
 local function safeDelete(objects, name)
     if not objects then
         warn("Не найдена папка " .. tostring(name))
         return
     end
-    
     for _, obj in pairs(objects:GetDescendants()) do
         if obj.Name == name then
             pcall(function()
@@ -327,19 +353,16 @@ local function safeDelete(objects, name)
     end
 end
 
--- Функция для безопасного удаления комнат
 local function safeDeleteRooms(housePath, roomNames)
     if not housePath then
         warn("Дом не найден!")
         return
     end
-
     local roomsFolder = housePath:FindFirstChild("Rooms")
     if not roomsFolder then
         warn("Папка 'Rooms' не найдена!")
         return
     end
-    
     for _, roomName in ipairs(roomNames) do
         local room = roomsFolder:FindFirstChild(roomName)
         if room then
@@ -353,17 +376,14 @@ local function safeDeleteRooms(housePath, roomNames)
     end
 end
 
--- Инициализация при запуске
+-- === Инициализация ===
 task.spawn(function()
-    -- Удаление Jeep объектов
     local mapFolder = workspace:FindFirstChild("#GAME") and workspace["#GAME"]:FindFirstChild("Map")
     if mapFolder then
         safeDelete(mapFolder, "Jeep")
     else
         warn("Папка '#GAME.Map' не найдена!")
     end
-
-    -- Удаление комнат
     local housePath = mapFolder and mapFolder:FindFirstChild("Houses") and 
                      mapFolder.Houses:FindFirstChild("Blue House")
     local roomsToDelete = {
@@ -371,91 +391,85 @@ task.spawn(function()
         "WorkRoom", "Bathroom", "Big Bedroom"
     }
     safeDeleteRooms(housePath, roomsToDelete)
-
-    -- Удаление Exterior и Backyard
     if housePath then
         local exterior = housePath:FindFirstChild("Exterior")
         if exterior then
             pcall(function() exterior:Destroy() end)
         end
-        
         local backyard = mapFolder.Houses:FindFirstChild("Backyard")
         if backyard then
             pcall(function() backyard:Destroy() end)
         end
     end
-
     print("Скрипт удаления завершен!")
 end)
 
-wait(1)
-
-local Player = game:GetService("Players").LocalPlayer
-local UIS = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-
-local TOGGLE_KEY = Enum.KeyCode.Y -- Клавиша для отключения
-local TOOL_NAME = "M1 Abrams" -- Название инструмента (можешь поменять)
-
+-- === Автоэкипировка ===
+local TOGGLE_KEY = Enum.KeyCode.Y
+local TOOL_PRIORITY = {
+    "d",
+    "d",
+    "Pine Tree",
+    "King Slayer",
+}
 local isRunning = true
-
--- Функция для поиска и экипировки инструмента
 local function EquipTool()
     if not isRunning then return end
-    
-    local Character = Player.Character or Player.CharacterAdded:Wait()
-    local Backpack = Player:FindFirstChildOfClass("Backpack")
+    local Character = player.Character or player.CharacterAdded:Wait()
+    local Backpack = player:FindFirstChildOfClass("Backpack")
     local Humanoid = Character:FindFirstChildOfClass("Humanoid")
-    
     if not Backpack or not Humanoid then return end
-
-    -- Ищем инструмент в инвентаре
-    local Tool = Backpack:FindFirstChild(TOOL_NAME) or Character:FindFirstChild(TOOL_NAME)
-    
-    -- Если нашли - экипируем
-    if Tool and not Character:FindFirstChild(Tool.Name) then
-        Humanoid:EquipTool(Tool)
-        print("🔹 [Auto-Equip] Взят: " .. TOOL_NAME)
+    for _, toolName in ipairs(TOOL_PRIORITY) do
+        local Tool = Backpack:FindFirstChild(toolName) or Character:FindFirstChild(toolName)
+        if Tool and Tool:IsA("Tool") then
+            if not Character:FindFirstChild(Tool.Name) then
+                Humanoid:EquipTool(Tool)
+                print("🔹 [Auto-Equip] Взят: " .. Tool.Name)
+            end
+            return
+        end
     end
 end
 
--- Отслеживаем смерть/респавн
-Player.CharacterAdded:Connect(function()
-    task.wait(2) -- Ждём загрузку
+player.CharacterAdded:Connect(function()
+    task.wait(2)
     if isRunning then
         EquipTool()
     end
 end)
 
--- Проверяем инвентарь каждую секунду
 RunService.Heartbeat:Connect(function()
     if isRunning then
         EquipTool()
-        task.wait(1) -- Задержка, чтобы не грузить игру
+        task.wait(1.5)
     end
 end)
 
--- Включение/выключение на "T"
-UIS.InputBegan:Connect(function(Input, _)
+UserInputService.InputBegan:Connect(function(Input, _)
     if Input.KeyCode == TOGGLE_KEY then
         isRunning = not isRunning
         print(isRunning and "🟢 [Auto-Equip] Включено" or "🔴 [Auto-Equip] Выключено")
     end
 end)
 
--- Первый запуск
 EquipTool()
-print("🛠 [Auto-Equip] Готово! Нажми T для отключения.")
+print("🛠 [Auto-Equip] Готово! Нажми Y для включения/выключения.")
+
+-- === Anti-AFK ===
+loadstring(game:HttpGet("https://raw.githubusercontent.com/ArgetnarYT/scripts/main/AntiAfk2.lua "))()
+
+-- === Включение NoClip при запуске ===
+enableNoclip()
+print("Постоянный NoClip активирован (включен по умолчанию)")
+print("Нажмите N для отключения NoClip")
+print("Скорость полёта к яйцам: " .. EGG_SPEED)
+print("Автопоиск и атака: Нажмите P для старта/остановки")
+print("Нажмите O для включения/выключения автоатаки")
 
 wait(1)
 
-loadstring(game:HttpGet("https://raw.githubusercontent.com/ArgetnarYT/scripts/main/AntiAfk2.lua"))()
+-- === Остальная часть скрипта (например, Auto Attack) ===
 
-wait(1)
-
---[[
-	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
-]]
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
