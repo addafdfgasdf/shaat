@@ -1,619 +1,502 @@
-local Players = game:GetService("Players")
-local player = Players.LocalPlayer
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
+-- === ШАГ 0: Получаем персонажа === --
+local player = game.Players.LocalPlayer
+local char = player.Character or player.CharacterAdded:Wait()
+local hum = char:FindFirstChildOfClass("Humanoid")
+local humanoidRootPart = char:WaitForChild("HumanoidRootPart")
+if not hum then
+    warn("Humanoid не найден!")
+    return
+end
+local tweenService = game:GetService("TweenService")
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local runService = game:GetService("RunService")
+local workspace = game:GetService("Workspace")
 
--- === Настройки ===
-local isSearching = false
-local autoAttackEnabled = true
-local HEIGHT_OFFSET = 3
-local EGG_SPEED = 50
-local NPC_TELEPORT_DELAY = 0.3
-local BLACKLIST = {"WhiteBas", "CrackedBas", "Flying", "Dead"}
-local MAX_WAIT_TIME = 25
-local NOCLIP_ENABLED = true
-local noclipConnection = nil
-
--- === Пути ===
-local NPCFolder = workspace:FindFirstChild("#GAME") and workspace["#GAME"].Folders and 
-                 workspace["#GAME"].Folders.HumanoidFolder and 
-                 workspace["#GAME"].Folders.HumanoidFolder:FindFirstChild("NPCFolder")
-local targetFolder = workspace:FindFirstChild("#GAME") and workspace["#GAME"].Folders and 
-                    workspace["#GAME"].Folders:FindFirstChild("DumpFolder") or workspace
-
--- === Приоритеты яиц ===
-local EGG_PRIORITY_GROUPS = {
-    -- Группа 1 (высший приоритет)
+-- === Аргументы атак === --
+local attackArgs = {
     {
-        "dolbaeb egg",
-        "eblan egg",
-        "gandon egg"
-    },
-    -- Группа 2 (средний приоритет)
-    {
-        "xuisos Egg"
-    },
-    -- Группа 3 (низкий приоритет, по желанию)
-    {
-        -- "Small Egg",
-        -- "Basic Egg"
+        A = char,
+        AN = "The Eggsterminator",
+        O = Vector3.new(-20.569494247436523, 83.16070556640625, -229.44720458984375),
+        D = Vector3.new(0.6126425862312317, -0.7733386158943176, -0.1631452739238739),
+        T = workspace:WaitForChild("#GAME"):WaitForChild("Folders"):WaitForChild("AccessoryFolder"):WaitForChild("The Eggsterminator"),
+        SP = Vector3.new(-3.698265552520752, 69.24060821533203, -238.54220581054688),
+        HP = Vector3.new(-3.645169258117676, 69.17046356201172, -238.52304077148438),
+        RS = Vector3.new(-3.698265552520752, 69.24060821533203, -238.54220581054688)
     }
 }
-
--- === Скорость ===
-local speedCheckCount = 0
-local MAX_SPEED_CHECKS = 10
-local speedHistory = {} -- Хранение всех собранных значений скорости
-
--- === Функция определения скорости (обновлённая) ===
-local function updateEggSpeed()
-    if speedCheckCount >= MAX_SPEED_CHECKS then return end
-    local playerHumanoidFolder = workspace["#GAME"] and workspace["#GAME"].Folders and 
-                                 workspace["#GAME"].Folders.HumanoidFolder and 
-                                 workspace["#GAME"].Folders.HumanoidFolder:FindFirstChild("PlayerFolder") and 
-                                 workspace["#GAME"].Folders.HumanoidFolder.PlayerFolder:FindFirstChild(player.Name)
-    if playerHumanoidFolder and playerHumanoidFolder:FindFirstChild("Humanoid") then
-        local baseSpeed = playerHumanoidFolder.Humanoid.WalkSpeed
-        table.insert(speedHistory, baseSpeed)
-        speedCheckCount += 1
-        print("[" .. speedCheckCount .. "/" .. MAX_SPEED_CHECKS .. "] Записана скорость: " .. baseSpeed)
-        if speedCheckCount == MAX_SPEED_CHECKS then
-            -- Подсчет частоты встречаемости скоростей
-            local frequency = {}
-            for _, speed in ipairs(speedHistory) do
-                if frequency[speed] then
-                    frequency[speed] = frequency[speed] + 1
-                else
-                    frequency[speed] = 1
-                end
-            end
-            -- Найти наиболее частую скорость
-            local mostFrequentSpeed = nil
-            local maxCount = 0
-            for speed, count in pairs(frequency) do
-                if count > maxCount or (count == maxCount and speed > mostFrequentSpeed) then
-                    mostFrequentSpeed = speed
-                    maxCount = count
-                end
-            end
-            -- Установить итоговую скорость
-            EGG_SPEED = math.max(1, mostFrequentSpeed)
-            print("Установлена итоговая скорость полёта к яйцам: " .. EGG_SPEED)
-        end
-    else
-        warn("Не удалось найти персонажа игрока для определения скорости")
-        EGG_SPEED = 50 -- Резервная скорость
-    end
+local explosionArgs = function(pos)
+    return {
+        {
+            ALV = Vector3.new(12.233718872070312, -408.0533752441406, -2.1072115898132324),
+            A = char,
+            AN = "The EggsterminatorExplode",
+            EP = pos
+        }
+    }
 end
 
--- === Проверка черного списка ===
-local function isNPCBlacklisted(npcName)
-    for _, blacklistedName in ipairs(BLACKLIST) do
-        if string.find(npcName, blacklistedName) then
-            return true
-        end
-    end
-    return false
+-- === ШАГ 1: АТАКУЕМ CrackedBas ДО СМЕРТИ === --
+local crackedBas = workspace["#GAME"].Folders.HumanoidFolder.NPCFolder:FindFirstChild("CrackedBas")
+if not crackedBas then
+    warn("CrackedBas не найден!")
+    return
 end
-
--- === NoClip ===
-local function enableNoclip()
-    if noclipConnection then noclipConnection:Disconnect() end
-    noclipConnection = RunService.Stepped:Connect(function()
-        if player.Character then
-            for _, part in pairs(player.Character:GetDescendants()) do
-                if part:IsA("BasePart") and part.CanCollide then
-                    part.CanCollide = false
-                end
-            end
-        end
+local crackedBasHumanoid = crackedBas:FindFirstChild("Humanoid")
+if not crackedBasHumanoid then
+    warn("CrackedBas.Humanoid не найден!")
+    return
+end
+print("Атакуем CrackedBas...")
+while crackedBasHumanoid.Parent and crackedBasHumanoid.Health > 0 do
+    pcall(function()
+        replicatedStorage:WaitForChild("Events"):WaitForChild("MainAttack"):FireServer(unpack(attackArgs))
     end)
-end
-
-local function disableNoclip()
-    if noclipConnection then
-        noclipConnection:Disconnect()
-        noclipConnection = nil
-    end
-    if player.Character then
-        for _, part in pairs(player.Character:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = true
-            end
-        end
-    end
-end
-
--- === Поиск яйца ===
-local function findEgg(eggName)
-    if not targetFolder then return nil end
-    local success, egg = pcall(function()
-        return targetFolder:FindFirstChild(eggName, false) or
-               targetFolder:FindFirstChild(eggName.." Egg", false) or
-               targetFolder:FindFirstChild("Egg of "..eggName, false)
+    wait(0.1)
+    pcall(function()
+        replicatedStorage:WaitForChild("Events"):WaitForChild("MainAttack"):FireServer(unpack(explosionArgs(Vector3.new(45.0675163269043, 0.04987591505050659, -246.93588256835938))))
     end)
-    if success and egg and (egg:IsA("Model") or egg:IsA("BasePart")) then
-        return egg
+    wait(0.1)
+end
+print("CrackedBas убит. Ждём 5 секунд...")
+wait(5)
+
+-- === ШАГ 2: НАЖИМАЕМ НА ClickDetector В МАГАЗИНЕ === --
+local shopDetector = workspace["#GAME"].Map._Other.Shop.ShopPictureFrame.Back.ClickDetector
+if shopDetector and shopDetector.Parent then
+    print("Нажимаем на ClickDetector магазина...")
+    fireclickdetector(shopDetector)
+else
+    warn("ClickDetector магазина не найден!")
+end
+wait(3)
+
+-- === ШАГ 3: ОТКРЫВАЕМ ДВЕРЬ ПЕРЕД ПОЛЁТОМ К ТОЧКЕ A === --
+local door = workspace["#GAME"].Map.BlackRoom.WhiteRoom.Door
+local doorDetector = door:FindFirstChild("ClickDetector")
+if not doorDetector then
+    warn("ClickDetector двери не найден!")
+else
+    print("Открываем дверь перед полётом к точке A...")
+    fireclickdetector(doorDetector)
+    wait(1)
+end
+
+-- === ШАГ 4: ПОЛЁТ К ТОЧКЕ A === --
+local targetPosA = CFrame.new(
+    2.07887316, 9962.97754, -55.1692734,
+    0.147809565, -0.00526440004, 0.989001811,
+    -8.41264036e-09, 0.999985814, 0.00532286847,
+    -0.989015818, -0.000786779157, 0.147807464
+)
+print("Летим к точке A...")
+local tween1 = tweenService:Create(humanoidRootPart, TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {CFrame = targetPosA})
+tween1:Play()
+tween1.Completed:Wait()
+
+-- === ШАГ 5: ПОЛЁТ К ТОЧКЕ B === --
+local targetPosB = CFrame.new(
+    -0.118163608, 9965.26172, -6.33421898,
+    -1, -3.31514201e-07, 7.22597633e-07,
+     4.16675006e-09, 0.906712592, 0.421749055,
+    -7.950004155e-07, 0.421749055, -0.906712592
+)
+print("Летим к точке B...")
+local tween2 = tweenService:Create(humanoidRootPart, TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {CFrame = targetPosB})
+tween2:Play()
+tween2.Completed:Wait()
+print("Прибыли на точку B. Фиксируем позицию до смерти WhiteBas...")
+humanoidRootPart.Anchored = true
+local bodyPos = Instance.new("BodyPosition")
+bodyPos.MaxForce = Vector3.new(1e7, 1e7, 1e7)
+bodyPos.D = 500
+bodyPos.P = 10000
+bodyPos.Position = targetPosB.Position
+bodyPos.Parent = humanoidRootPart
+local bodyGyro = Instance.new("BodyGyro")
+bodyGyro.MaxTorque = Vector3.new(1e7, 1e7, 1e7)
+bodyGyro.D = 200
+bodyGyro.P = 20000
+bodyGyro.CFrame = targetPosB
+bodyGyro.Parent = humanoidRootPart
+
+-- === ЖДЁМ 1 СЕКУНДУ, ЗАКРЫВАЕМ ДВЕРЬ === --
+print("Ждём 1 секунду перед закрытием двери...")
+wait(1)
+if doorDetector then
+    print("Закрываем дверь...")
+    fireclickdetector(doorDetector)
+    wait(1)
+end
+
+-- === ШАГ 6: АТАКУЕМ WhiteBas ДО СМЕРТИ === --
+local whiteBas = workspace["#GAME"].Folders.HumanoidFolder.NPCFolder:FindFirstChild("WhiteBas")
+if not whiteBas then
+    warn("WhiteBas не найден!")
+    bodyPos:Destroy()
+    bodyGyro:Destroy()
+    humanoidRootPart.Anchored = false
+    return
+end
+local whiteBasHumanoid = whiteBas:FindFirstChild("Humanoid")
+if not whiteBasHumanoid then
+    warn("WhiteBas.Humanoid не найден!")
+    bodyPos:Destroy()
+    bodyGyro:Destroy()
+    humanoidRootPart.Anchored = false
+    return
+end
+local floorPart = workspace["#GAME"].Map.BlackRoom.WhiteRoom.Floor
+if not floorPart then
+    warn("Floor не найден!")
+    bodyPos:Destroy()
+    bodyGyro:Destroy()
+    humanoidRootPart.Anchored = false
+    return
+end
+print("Начинаем атаку WhiteBas...")
+while whiteBasHumanoid.Parent and whiteBasHumanoid.Health > 0 do
+    pcall(function()
+        replicatedStorage:WaitForChild("Events"):WaitForChild("MainAttack"):FireServer(unpack(attackArgs))
+    end)
+    wait(0.1)
+    pcall(function()
+        replicatedStorage:WaitForChild("Events"):WaitForChild("MainAttack"):FireServer(unpack(explosionArgs(floorPart.Position)))
+    end)
+    wait(0.1)
+end
+print("WhiteBas убит.")
+bodyPos:Destroy()
+bodyGyro:Destroy()
+humanoidRootPart.Anchored = false
+
+-- === ШАГ 7: ТЕЛЕПОРТ НА ФИНАЛЬНУЮ ТОЧКУ === --
+local finalPos = CFrame.new(
+    -0.111955911, 9940.49805, 0.599699318,
+    -0.139257208, -4.95666654e-08, 0.99025625,
+    -6.72152511e-09, 1, 4.91091541e-08,
+    -0.99025625, 1.82771215e-10, -0.139257208
+)
+print("Телепортируемся на финальную точку...")
+humanoidRootPart.Anchored = true
+humanoidRootPart.CFrame = finalPos
+task.wait(0.1)
+
+local function stabilizeAtCFrame(targetCFrame, duration)
+    local bp = Instance.new("BodyPosition")
+    bp.MaxForce = Vector3.new(1e7, 1e7, 1e7)
+    bp.D = 500
+    bp.P = 10000
+    bp.Position = targetCFrame.Position
+    bp.Parent = humanoidRootPart
+    local bg = Instance.new("BodyGyro")
+    bg.MaxTorque = Vector3.new(1e7, 1e7, 1e7)
+    bg.D = 200
+    bg.P = 20000
+    bg.CFrame = targetCFrame
+    bg.Parent = humanoidRootPart
+    wait(duration)
+    bp:Destroy()
+    bg:Destroy()
+    humanoidRootPart.Anchored = false
+end
+stabilizeAtCFrame(finalPos, 3)
+print("Финальная точка достигнута. Миссия завершена.")
+
+-- =============================================================================
+-- 🟡 ЭТАП 2: АВТО-ПОЕДАНИЕ WhiteBas (ровно 10 секунд) — БЕЗ ОШИБКИ Disconnect
+-- =============================================================================
+
+print("🟢 Запускаем авто-поедание 'WhiteBas' на 10 секунд...")
+local remote = replicatedStorage:WaitForChild("Events"):WaitForChild("MainAttack")
+local camera = workspace.CurrentCamera
+local mainFolder = workspace["#GAME"].Folders.HumanoidFolder.NPCFolder
+local TARGET_NAME = "WhiteBas"
+
+local function getDeadWhiteBas()
+    local npc = mainFolder:FindFirstChild(TARGET_NAME)
+    if not npc then return nil end
+    local humanoid = npc:FindFirstChildOfClass("Humanoid")
+    if humanoid and (humanoid.Health <= 0 or string.find(humanoid.Name, "Dead", 1, true)) then
+        return npc
     end
     return nil
 end
 
--- === Получение HRP ===
-local function getHRP()
-    if not player or not player.Character then
-        warn("Персонаж ещё не загружен. Жду...")
-        local startTime = os.clock()
-        while os.clock() - startTime < MAX_WAIT_TIME do
-            if player and player.Character then
-                break
-            end
-            task.wait(0.1)
-        end
-        if not player or not player.Character then
-            warn("Персонаж так и не загрузился")
-            return nil
+local function getValidBodyParts(model)
+    local validParts = {}
+    for _, part in ipairs(model:GetDescendants()) do
+        if part:IsA("BasePart") and not part:GetAttribute("IsGettingEaten") then
+            table.insert(validParts, part)
         end
     end
-    local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-    if not hrp then
-        warn("HumanoidRootPart не найден. Жду...")
-        local startTime = os.clock()
-        while os.clock() - startTime < MAX_WAIT_TIME do
-            hrp = player.Character:FindFirstChild("HumanoidRootPart")
-            if hrp then break end
-            task.wait(0.1)
-        end
-    end
-    if not hrp then
-        warn("HumanoidRootPart не найден после ожидания")
-        return nil
-    end
-    return hrp
+    return validParts
 end
 
--- === Перемещение к яйцу ===
-local function moveToEggWithTween(targetPosition)
-    local hrp = getHRP()
-    if not hrp then return nil end
-    updateEggSpeed()
-    local distance = (targetPosition - hrp.Position).Magnitude
-    local duration = distance / EGG_SPEED
-    local tween = TweenService:Create(
-        hrp,
-        TweenInfo.new(duration, Enum.EasingStyle.Linear),
-        {CFrame = CFrame.new(targetPosition, targetPosition + Vector3.new(0, 0, -1))}
+local eatingActive = true
+local heartbeatConn = nil  -- Объявляем заранее
+
+heartbeatConn = runService.Heartbeat:Connect(function()
+    if not eatingActive then
+        if heartbeatConn then
+            heartbeatConn:Disconnect()
+        end
+        return
+    end
+    local whiteBas = getDeadWhiteBas()
+    if not whiteBas then return end
+    local parts = getValidBodyParts(whiteBas)
+    if #parts == 0 then return end
+    local part = parts[math.random(1, #parts)]
+    local origin = camera.CFrame.Position
+    local targetPos = part.Position + Vector3.new(
+        (math.random() - 0.5) * 1,
+        (math.random() - 0.5) * 1,
+        (math.random() - 0.5) * 1
     )
-    tween:Play()
-    return tween
-end
-
--- === Сбор яйца ===
-local function autoCollectEgg(egg)
-    if not egg or not isSearching then return false end
-    local hrp = getHRP()
-    if not hrp then return false end
-    local prompt
-    local success, err = pcall(function()
-        prompt = egg:FindFirstChildOfClass("ProximityPrompt") or
-                (egg:IsA("Model") and egg.PrimaryPart and egg.PrimaryPart:FindFirstChildOfClass("ProximityPrompt"))
+    local direction = (targetPos - origin).Unit or camera.CFrame.LookVector
+    pcall(function()
+        remote:FireServer({
+            ["AN"] = "Eat",
+            ["D"] = direction,
+            ["O"] = origin,
+            ["FBP"] = part
+        })
     end)
-    if not success or not prompt then
-        warn("Не найден ProximityPrompt у яйца")
-        return false
-    end
-    local targetPos
-    if egg:IsA("BasePart") then
-        targetPos = egg.Position + Vector3.new(0, HEIGHT_OFFSET, 0)
-    elseif egg:IsA("Model") and egg.PrimaryPart then
-        targetPos = egg.PrimaryPart.Position + Vector3.new(0, HEIGHT_OFFSET, 0)
-    else
-        warn("Неверный тип объекта яйца")
-        return false
-    end
-    local tween = moveToEggWithTween(targetPos)
-    local startTime = os.clock()
-    local maxTime = 8
-    while os.clock() - startTime < maxTime and isSearching do
-        if not egg or not egg:IsDescendantOf(workspace) then
-            tween:Cancel()
-            return true
-        end
-        if (hrp.Position - targetPos).Magnitude < 10 then
-            pcall(function()
-                fireproximityprompt(prompt, 3)
-            end)
-            tween:Cancel()
-            return true
-        end
-        task.wait()
-    end
-    tween:Cancel()
-    return false
-end
+end)
 
--- === Атака NPC ===
-local function teleportToNPC(npc)
-    if not npc then return end
-    local hrp = getHRP()
-    if not hrp then return end
-    local rootPart = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("UpperTorso")
-    if not rootPart then return end
-    hrp.CFrame = CFrame.new(rootPart.Position + Vector3.new(0, HEIGHT_OFFSET, 0))
-end
+task.delay(10, function()
+    eatingActive = false
+    print("🍽️ Авто-поедание завершено (10 сек прошло).")
+end)
+task.wait(10)
 
-local function attackNPC(npc)
-    if not npc or not isSearching then return end
-    if isNPCBlacklisted(npc.Name) then return end
-    local humanoid = npc:FindFirstChild("Humanoid")
-    if not humanoid or humanoid.Health <= 0 then return end
-    local hrp = getHRP()
-    if not hrp then return end
-    teleportToNPC(npc)
-    local npcRoot = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("UpperTorso")
-    if npcRoot and (hrp.Position - npcRoot.Position).Magnitude < 10 then
-        pcall(function()
-            humanoid:TakeDamage(10)
-        end)
-    end
-end
+-- =============================================================================
+-- 🟡 ЭТАП 3: АВТО-ВЗЯТИЕ ИНСТРУМЕНТОВ (Eat, AHHH...) — С ПЕРЕКЛЮЧЕНИЕМ ПО T
+-- =============================================================================
 
-local function attackNPCs()
-    if not isSearching or not NPCFolder then return end
-    for _, npc in ipairs(NPCFolder:GetChildren()) do
-        if not isSearching then break end
-        if isNPCBlacklisted(npc.Name) then continue end
-        if npc:FindFirstChild("Humanoid") and npc.Humanoid.Health > 0 then
-            attackNPC(npc)
-            task.wait(NPC_TELEPORT_DELAY)
-        end
-    end
-end
+print("🔁 Запускаем авто-взятие инструментов... (нажми T, чтобы включить/выключить)")
 
--- === Сбор яиц с приоритетами ===
-local function collectEggs()
-    if not isSearching then return false end
-    -- Перебор по уровням приоритета
-    for _, priorityGroup in ipairs(EGG_PRIORITY_GROUPS) do
-        for _, eggName in ipairs(priorityGroup) do
-            if not isSearching then return false end
-            local egg = findEgg(eggName)
-            if egg then
-                print("🎯 Найдено яйцо с приоритетом: " .. eggName)
-                if autoCollectEgg(egg) then
-                    task.wait(0.5)
-                    return true
-                end
+local backpack = player:FindFirstChildOfClass("Backpack") or player:WaitForChild("Backpack")
+
+local EAT_NAMES = {"Eat", "Eat?", "Eaht", "Eahht", "Eahhht", "Eahhh", "ahhh", "AHHH"}
+local ValidNameLookup = {}
+for _, name in ipairs(EAT_NAMES) do
+    ValidNameLookup[string.lower(name)] = true
+end
+local function IsEatName(name)
+    return ValidNameLookup[string.lower(name)] == true
+end
+local function FindEatTool()
+    for _, container in ipairs({backpack, char}) do
+        for _, item in ipairs(container:GetChildren()) do
+            if item:IsA("Tool") and IsEatName(item.Name) then
+                return item
             end
         end
     end
-    return false
+    return nil
 end
 
--- === Главный цикл ===
-local function mainLoop()
-    while isSearching do
-        local success, err = pcall(function()
-            if not collectEggs() then
-                if autoAttackEnabled then
-                    attackNPCs()
-                end
-            end
-        end)
-        if not success then
-            warn("Ошибка в главном цикле: " .. tostring(err))
-        end
-        task.wait(0.1)
-    end
-end
-
--- === Управление ===
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.P then
-        isSearching = not isSearching
-        if isSearching then
-            print("Автопоиск и атака активированы. Нажмите P для остановки")
-            task.spawn(mainLoop)
-        else
-            print("Автопоиск и атака остановлены")
-            local hrp = getHRP()
-            if hrp then hrp.Velocity = Vector3.new() end
-        end
-    elseif input.KeyCode == Enum.KeyCode.N then
-        NOCLIP_ENABLED = not NOCLIP_ENABLED
-        if NOCLIP_ENABLED then
-            enableNoclip()
-            print("NoClip включен")
-        else
-            disableNoclip()
-            print("NoClip выключен")
-        end
-    elseif input.KeyCode == Enum.KeyCode.O then
-        autoAttackEnabled = not autoAttackEnabled
-        print(autoAttackEnabled and "Автоатака включена" or "Автоатака выключена")
+local autoEquipEnabled = true
+game:GetService("UserInputService").InputBegan:Connect(function(input, processed)
+    if processed then return end
+    if input.KeyCode == Enum.KeyCode.T then
+        autoEquipEnabled = not autoEquipEnabled
+        print("🔹 Авто-взятие: " .. (autoEquipEnabled and "ВКЛ" or "ВЫКЛ"))
     end
 end)
 
--- === Удаление объектов ===
-local function safeDelete(objects, name)
-    if not objects then
-        warn("Не найдена папка " .. tostring(name))
-        return
-    end
-    for _, obj in pairs(objects:GetDescendants()) do
-        if obj.Name == name then
-            pcall(function()
-                obj:Destroy()
-                print("Удален объект " .. name .. ": " .. obj:GetFullName())
-            end)
-        end
-    end
-end
-
-local function safeDeleteRooms(housePath, roomNames)
-    if not housePath then
-        warn("Дом не найден!")
-        return
-    end
-    local roomsFolder = housePath:FindFirstChild("Rooms")
-    if not roomsFolder then
-        warn("Папка 'Rooms' не найдена!")
-        return
-    end
-    for _, roomName in ipairs(roomNames) do
-        local room = roomsFolder:FindFirstChild(roomName)
-        if room then
-            pcall(function()
-                room:Destroy()
-                print("Комната '" .. roomName .. "' удалена")
-            end)
-        else
-            warn("Комната '" .. roomName .. "' не найдена!")
-        end
-    end
-end
-
--- === Инициализация ===
 task.spawn(function()
-    local mapFolder = workspace:FindFirstChild("#GAME") and workspace["#GAME"]:FindFirstChild("Map")
-    if mapFolder then
-        safeDelete(mapFolder, "Jeep")
-    else
-        warn("Папка '#GAME.Map' не найдена!")
-    end
-    local housePath = mapFolder and mapFolder:FindFirstChild("Houses") and 
-                     mapFolder.Houses:FindFirstChild("Blue House")
-    local roomsToDelete = {
-        "LivingRoom", "Kitchen", "Small Bedroom",
-        "WorkRoom", "Bathroom", "Big Bedroom"
-    }
-    safeDeleteRooms(housePath, roomsToDelete)
-    if housePath then
-        local exterior = housePath:FindFirstChild("Exterior")
-        if exterior then
-            pcall(function() exterior:Destroy() end)
-        end
-        local backyard = mapFolder.Houses:FindFirstChild("Backyard")
-        if backyard then
-            pcall(function() backyard:Destroy() end)
+    while true do
+        if autoEquipEnabled then
+            local tool = FindEatTool()
+            if tool then
+                if not char:FindFirstChild(tool.Name) then
+                    pcall(hum.EquipTool, hum, tool)
+                    print("🔹 [Auto-Equip] Взят: " .. tool.Name)
+                end
+                task.wait(0.1)
+                pcall(hum.UnequipTools, hum)
+                print("🔸 [Auto-Equip] Снят")
+                task.wait(0.1)
+            else
+                task.wait(0.1)
+            end
+        else
+            task.wait(0.1)
         end
     end
-    print("Скрипт удаления завершен!")
 end)
 
--- === Автоэкипировка ===
-local TOGGLE_KEY = Enum.KeyCode.Y
-local TOOL_PRIORITY = {
-    "d",
-    "d",
-    "Pine Tree",
-    "King Slayer",
-}
-local isRunning = true
-local function EquipTool()
-    if not isRunning then return end
-    local Character = player.Character or player.CharacterAdded:Wait()
-    local Backpack = player:FindFirstChildOfClass("Backpack")
-    local Humanoid = Character:FindFirstChildOfClass("Humanoid")
-    if not Backpack or not Humanoid then return end
-    for _, toolName in ipairs(TOOL_PRIORITY) do
-        local Tool = Backpack:FindFirstChild(toolName) or Character:FindFirstChild(toolName)
-        if Tool and Tool:IsA("Tool") then
-            if not Character:FindFirstChild(Tool.Name) then
-                Humanoid:EquipTool(Tool)
-                print("🔹 [Auto-Equip] Взят: " .. Tool.Name)
-            end
-            return
-        end
-    end
+-- =============================================================================
+-- 🔴 ЭТАП 4: АВТО-КЛИКИ + УПРАВЛЕНИЕ ДВЕРЬЮ ДЛЯ BlueBas & GreyBas
+-- =============================================================================
+
+print("🎮 Запускаем систему кликов и управления дверью...")
+
+local GAME = workspace["#GAME"]
+local MAP = GAME.Map
+local DOOR = MAP.BlackRoom.WhiteRoom.Door
+local DOOR_CLICK = DOOR:FindFirstChild("ClickDetector")
+if not DOOR_CLICK then
+    warn("❌ ClickDetector двери не найден!")
+    return
 end
 
-player.CharacterAdded:Connect(function()
-    task.wait(2)
-    if isRunning then
-        EquipTool()
+-- --- Цели ---
+local PATHS = {
+    BlueBas           = "workspace['#GAME'].Map.BlueBas.ClickDetector",
+    GreyBas           = "workspace['#GAME'].Map.GreyBas.ClickDetector",
+    YellowBas         = "workspace['#GAME'].Map.YellowBas.ClickDetector",
+    WhiteBasFakeHead  = "workspace['#GAME'].Map.WhiteBasFakeHead.ClickDetector",
+    WhiteBas          = "workspace['#GAME'].Map.WhiteBas.ClickDetector",
+    BlackBas          = "workspace['#GAME'].Map.BlackBas.ClickDetector"
+}
+
+-- --- Состояние ---
+local State = {
+    BlueBasActive = false,
+    GreyBasActive = false
+}
+
+local function safeFire(detector, label)
+    spawn(function()
+        pcall(fireclickdetector, detector)
+        print("🖱️ Кликнули по: " .. label)
+    end)
+end
+
+local function getDetector(pathStr)
+    local success, result = pcall(function()
+        return loadstring("return " .. pathStr)()
+    end)
+    if success and result and result.Parent and result:IsA("ClickDetector") then
+        return result
+    end
+    return nil
+end
+
+-- =================== [ BlueBas ] =================== --
+spawn(function()
+    while wait(0.1) do
+        -- МЕНЯЕМ ТОЛЬКО ЭТУ СТРОКУ: проверяем сам Part, а не его ClickDetector
+        local bluebasPart = workspace["#GAME"].Map:FindFirstChild("BlueBas")
+        local exists = bluebasPart and bluebasPart:IsA("BasePart")
+
+        if exists and not State.BlueBasActive then
+            State.BlueBasActive = true
+            print("🔵 BlueBas появился! Открываем дверь...")
+            safeFire(DOOR_CLICK, "Door (открыть)")
+        elseif not exists and State.BlueBasActive then
+            State.BlueBasActive = false
+            print("🔵 BlueBas исчез.")
+            if not State.GreyBasActive then
+                print("🚪 GreyBas тоже нет → закрываем дверь.")
+                safeFire(DOOR_CLICK, "Door (закрыть после BlueBas)")
+            end
+        end
     end
 end)
 
-RunService.Heartbeat:Connect(function()
-    if isRunning then
-        EquipTool()
-        task.wait(1.5)
+-- =================== [ GreyBas ] =================== --
+spawn(function()
+    while wait(0.1) do
+        local det = getDetector(PATHS.GreyBas)
+        if det and not State.GreyBasActive then
+            State.GreyBasActive = true
+            print("🟨 GreyBas появился! Кликаем, чтобы исчез...")
+            safeFire(det, "GreyBas")
+            task.wait(0.5)
+        elseif not det and State.GreyBasActive then
+            State.GreyBasActive = false
+            print("🟨 GreyBas исчез.")
+            if not State.BlueBasActive then
+                print("🚪 BlueBas тоже нет → закрываем дверь.")
+                safeFire(DOOR_CLICK, "Door (закрыть после GreyBas)")
+            end
+        end
     end
 end)
 
-UserInputService.InputBegan:Connect(function(Input, _)
-    if Input.KeyCode == TOGGLE_KEY then
-        isRunning = not isRunning
-        print(isRunning and "🟢 [Auto-Equip] Включено" or "🔴 [Auto-Equip] Выключено")
+-- =================== [ АВТО-КЛИКЕРЫ (0.1 сек) ] =================== --
+
+local function startAutoClicker(npcName, path)
+    spawn(function()
+        while wait(0.1) do
+            local detector = getDetector(path)
+            if detector then
+                safeFire(detector, npcName .. " (автоклик)")
+            end
+        end
+    end)
+end
+
+for npcName, path in pairs(PATHS) do
+    startAutoClicker(npcName, path)
+end
+
+print("✅ Все системы запущены: кач → поедание → авто-взятие → авто-клики.")
+
+-- =============================================================================
+-- 🔵 ЭТАП 5: УПРАВЛЕНИЕ ДВЕРЬЮ ПО КЛАВИШЕ R
+-- =============================================================================
+
+print("🚪 Подключаем ручное управление дверью: нажмите [R], чтобы открыть/закрыть")
+
+local userInputService = game:GetService("UserInputService")
+
+userInputService.InputBegan:Connect(function(input, processed)
+    if processed then return end
+    if input.KeyCode == Enum.KeyCode.R then
+        if DOOR_CLICK and DOOR_CLICK.Parent then
+            pcall(function()
+                fireclickdetector(DOOR_CLICK)
+                local isOpen = DOOR:GetAttribute("Open") or false
+                print("🚪 Дверь " .. (isOpen and "закрыта" or "открыта") .. " (по R)")
+            end)
+        else
+            warn("❌ Невозможно взаимодействовать с дверью: ClickDetector недоступен")
+        end
     end
 end)
 
-EquipTool()
-print("🛠 [Auto-Equip] Готово! Нажми Y для включения/выключения.")
-
--- === Anti-AFK ===
-loadstring(game:HttpGet("https://raw.githubusercontent.com/ArgetnarYT/scripts/main/AntiAfk2.lua "))()
-
--- === Включение NoClip при запуске ===
-enableNoclip()
-print("Постоянный NoClip активирован (включен по умолчанию)")
-print("Нажмите N для отключения NoClip")
-print("Скорость полёта к яйцам: " .. EGG_SPEED)
-print("Автопоиск и атака: Нажмите P для старта/остановки")
-print("Нажмите O для включения/выключения автоатаки")
-
-wait(1)
-
--- === Остальная часть скрипта (например, Auto Attack) ===
+-- LocalScript (в StarterPlayerScripts)
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
-local UserInputService = game:GetService("UserInputService")
 
-local LocalPlayer = Players.LocalPlayer
-if not LocalPlayer then
-	Players.PlayerAdded:Wait()
-	LocalPlayer = Players.LocalPlayer
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+
+-- Путь к месту телепортации
+local targetPart = workspace:FindFirstChild("#GAME")
+    and workspace["#GAME"].Map.BlackRoom.WhiteRoom:FindFirstChild("Ahh")
+
+if not targetPart then
+    warn("Не найдено место телепортации: workspace['#GAME'].Map.BlackRoom.WhiteRoom.Ahh")
+    return
 end
 
-local Camera = Workspace.CurrentCamera
-local Mouse = LocalPlayer:GetMouse() -- Retained as it might be needed for other game interactions, though not directly by this script's core logic.
+local active = true
 
-local gameFolder = Workspace:WaitForChild("#GAME", 10)
-local foldersFolder = gameFolder and gameFolder:WaitForChild("Folders", 5)
-local humanoidFolder = foldersFolder and foldersFolder:WaitForChild("HumanoidFolder", 5)
-local mainFolder = humanoidFolder and humanoidFolder:WaitForChild("NPCFolder", 5) -- Your target folder
-
-local eventsFolder = ReplicatedStorage:WaitForChild("Events", 10)
-local remote = eventsFolder and eventsFolder:WaitForChild("MainAttack", 5)
-
-if not mainFolder then
-	warn("Auto Attack: Could not find NPCFolder at expected path.")
-	return
-end
-if not remote then
-	warn("Auto Attack: Could not find MainAttack RemoteEvent.")
-	return
-end
-
-
-local isActive = false
-
-local priorityNames1 = { "Amethyst", "Ruby", "Emerald", "Diamond", "Golden" }
-local priorityNames2 = { "Bull" }
-
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
-	if input.KeyCode == Enum.KeyCode.T then
-		isActive = not isActive
-		print(isActive and "Auto Attack ON" or "Auto Attack OFF")
-	end
-end)
-
-local function getDeadNPCs()
-	local deadList = {}
-	if not mainFolder then return deadList end
-
-	for _, npc in ipairs(mainFolder:GetChildren()) do
-		if npc:IsA("Model") then
-			local humanoid = npc:FindFirstChildOfClass("Humanoid")
-			-- Check if Humanoid exists AND (Health is 0 or less OR its name contains "Dead")
-			if humanoid and (humanoid.Health <= 0 or string.find(humanoid.Name, "Dead", 1, true)) then
-				table.insert(deadList, npc)
-			end
-		end
-	end
-	return deadList
-end
-
-local function getPriorityTarget(npcList)
-	local function findByPriority(list, keywords)
-		for _, keyword in ipairs(keywords) do
-			for _, npc in ipairs(list) do
-				if npc.Name:find(keyword, 1, true) then
-					return npc
-				end
-			end
-		end
-		return nil
-	end
-
-	local target = findByPriority(npcList, priorityNames1)
-	if target then return target end
-
-	target = findByPriority(npcList, priorityNames2)
-	if target then return target end
-
-	if #npcList > 0 then
-		return npcList[math.random(1, #npcList)]
-	end
-
-	return nil
-end
-
-local function getValidBodyParts(model)
-	local validParts = {}
-	for _, part in ipairs(model:GetDescendants()) do
-		if part:IsA("BasePart") then
-			local isGettingEaten = part:GetAttribute("IsGettingEaten")
-			if not isGettingEaten then
-				table.insert(validParts, part)
-			end
-		end
-	end
-	return validParts
-end
-
-local USE_DEVIATION = true
-local MAX_DEVIATION_STUDS = 0.5
-
+-- Самый быстрый способ — Heartbeat (выполняется каждый кадр)
 RunService.Heartbeat:Connect(function()
-	if not isActive then return end
-
-	local deadNPCList = getDeadNPCs()
-	if #deadNPCList == 0 then return end
-
-	local targetNpc = getPriorityTarget(deadNPCList)
-	if not targetNpc or not targetNpc.Parent then return end
-
-	local validParts = getValidBodyParts(targetNpc)
-	if #validParts == 0 then
-		return
-	end
-
-	local bodyPart = validParts[math.random(1, #validParts)]
-
-	local origin = Camera.CFrame.Position
-
-	local targetPosition = bodyPart.Position
-
-	if USE_DEVIATION and MAX_DEVIATION_STUDS > 0 then
-		local offsetX = (math.random() - 0.5) * 2 * MAX_DEVIATION_STUDS
-		local offsetY = (math.random() - 0.5) * 2 * MAX_DEVIATION_STUDS
-		local offsetZ = (math.random() - 0.5) * 2 * MAX_DEVIATION_STUDS
-		targetPosition = targetPosition + Vector3.new(offsetX, offsetY, offsetZ)
-	end
-
-	local direction = (targetPosition - origin).Unit
-
-    if direction.X ~= direction.X or direction.Y ~= direction.Y or direction.Z ~= direction.Z then
-        warn("Calculated NaN direction! Falling back to LookVector. Origin:", origin, "Target:", targetPosition)
-        direction = Camera.CFrame.LookVector
+    if not active or not character or not character:FindFirstChild("HumanoidRootPart") then
+        return
     end
-
-	local args = {
-		[1] = {
-			["AN"] = "Eat",
-			["D"] = direction,
-			["O"] = origin,
-			["FBP"] = bodyPart
-		}
-	}
-	remote:FireServer(unpack(args))
+    -- Мгновенный телепорт
+    humanoidRootPart.CFrame = CFrame.new(targetPart.Position)
 end)
+
+-- Остановка по нажатию Y
+game:GetService("UserInputService").InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.Y then
+        active = false
+        print("Телепортация остановлена.")
+    end
+end)
+
+print("Телепортация активирована. Нажмите Y, чтобы остановить.")
